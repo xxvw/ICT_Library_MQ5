@@ -12,6 +12,7 @@
 
 #include "Core/IctEngine.mqh"
 #include "Internal/LegacySnapshot.mqh"
+#include "Internal/HistoryContext.mqh"
 #include "SwingPoints.mqh"
 #include "MarketStructure.mqh"
 #include "OrderBlock.mqh"
@@ -66,8 +67,6 @@ private:
    void              ReleaseModules();
    bool              InitModules(const string symbol,const ENUM_TIMEFRAMES timeframe,
                                   const SmcConfig &config,const bool legacyTime);
-   bool              CopySynchronized(const string symbol,const ENUM_TIMEFRAMES timeframe,
-                                       const datetime start,const datetime end,MqlRates &rates[]);
 
 public:
                      CSmcManager();
@@ -364,23 +363,6 @@ bool CSmcManager::InitModules(const string symbol,const ENUM_TIMEFRAMES timefram
 //+------------------------------------------------------------------+
 //| 全モジュールを正しい依存関係順に更新                               |
 //+------------------------------------------------------------------+
-bool CSmcManager::CopySynchronized(const string symbol,const ENUM_TIMEFRAMES timeframe,
-                                    const datetime start,const datetime end,MqlRates &rates[])
-  {
-   ArrayResize(rates,0);
-   ArraySetAsSeries(rates,false);
-   if(end < start || CopyRates(symbol,timeframe,start,end,rates) < 1 ||
-      !SeriesInfoInteger(symbol,timeframe,SERIES_SYNCHRONIZED) ||
-      (SeriesInfoInteger(symbol,timeframe,SERIES_FIRSTDATE) <= 0 ||
-       SeriesInfoInteger(symbol,timeframe,SERIES_FIRSTDATE) > start) ||
-      SmcBarClosedAt((datetime)SeriesInfoInteger(symbol,timeframe,SERIES_LASTBAR_DATE),timeframe) < end)
-     {
-      ArrayResize(rates,0);
-      return false;
-     }
-   return true;
-  }
-
 bool CSmcManager::GetSnapshot(SmcSnapshot &snapshot) const
   {
    if(!m_hasSnapshot) return false;
@@ -399,46 +381,16 @@ bool CSmcManager::Update()
       SmcUnavailableSnapshot(m_snapshot,m_config,m_symbol,m_timeframe,SMC_STATUS_ERROR,"Manager is not initialized",true);
       return false;
      }
-   int requested = m_config.lookbackBars+MathMax(m_config.WarmupBars(),23)+1;
-   if(m_config.enablePO3)
-      requested = MathMax(requested,(int)MathCeil(172800.0/PeriodSeconds(m_timeframe))+m_config.WarmupBars()+1);
-   MqlRates shared[],closed[],daily[],weekly[],minutes[],companion[];
-   ArraySetAsSeries(shared,false);
-   if(CopyRates(m_symbol,m_timeframe,0,requested,shared) != requested ||
-      !SeriesInfoInteger(m_symbol,m_timeframe,SERIES_SYNCHRONIZED))
+   SmcHistoryContext context;
+   if(!SmcAcquireHistory(m_symbol,m_timeframe,m_config,context))
      {
       SmcUnavailableSnapshot(m_snapshot,m_config,m_symbol,m_timeframe,SMC_STATUS_NOT_READY,
                              "Primary history is unavailable, unsynchronized or shorter than lookback plus warmup",true);
       return false;
      }
-   ArrayCopy(closed,shared,0,0,requested-1);
-   datetime asOf = SmcBarClosedAt(closed[requested-2].time,m_timeframe);
-   MqlDateTime parts;
-   TimeToStruct(closed[0].time,parts);
-   parts.hour = 0; parts.min = 0; parts.sec = 0;
-   datetime minuteStart = StructToTime(parts)-86400;
-   bool minutesOK = CopySynchronized(m_symbol,PERIOD_M1,minuteStart,asOf-1,minutes);
-   if(m_config.enableCalendar)
-     {
-      CopySynchronized(m_symbol,PERIOD_D1,minuteStart-14*86400,asOf,daily);
-      CopySynchronized(m_symbol,PERIOD_W1,minuteStart-14*86400,asOf,weekly);
-     }
-   double tick = SymbolInfoDouble(m_symbol,SYMBOL_TRADE_TICK_SIZE);
-   double point = SymbolInfoDouble(m_symbol,SYMBOL_POINT);
-   int digits = (int)SymbolInfoInteger(m_symbol,SYMBOL_DIGITS);
-   double pip = point*((digits == 2 || digits == 4) ? 1.0 : 10.0);
-   double companionTick = tick;
-   if(m_config.IsSMTEnabled())
-     {
-      companionTick = SymbolInfoDouble(m_config.smtSymbol,SYMBOL_TRADE_TICK_SIZE);
-      if(SymbolSelect(m_config.smtSymbol,true))
-        {
-         CopySynchronized(m_config.smtSymbol,m_timeframe,closed[0].time,asOf-1,companion);
-         companionTick = SymbolInfoDouble(m_config.smtSymbol,SYMBOL_TRADE_TICK_SIZE);
-        }
-     }
-   SmcEvaluateICT(closed,daily,weekly,minutes,companion,m_config,m_symbol,m_timeframe,
-                   tick,pip,companionTick,m_snapshot,minutesOK ? minuteStart : 0,minutesOK ? asOf : 0);
+   SmcEvaluateICT(context.closed,context.daily,context.weekly,context.minutes,context.companion,
+                   m_config,m_symbol,m_timeframe,context.tick,context.pip,context.companionTick,m_snapshot,
+                   context.minutesOK ? context.minuteStart : 0,context.minutesOK ? context.asOf : 0);
    if(m_snapshot.status == SMC_STATUS_ERROR || m_snapshot.asOf == 0)
      {
       for(int i = 0; i <= (int)ICT_BREAKER; i++)
@@ -448,18 +400,19 @@ bool CSmcManager::Update()
 
    // Every primary-timeframe module sees the same bars, including the forming
    // sentinel that old APIs address at shift zero. Detector loops exclude it.
-   m_swing.SetRates(shared);
-   m_structure.SetRates(shared);
-   m_ob.SetRates(shared);
-   m_fvg.SetRates(shared);
-   m_liquidity.SetRates(shared);
-   m_pd.SetRates(shared);
-   m_ote.SetRates(shared);
-   m_kz.SetRates(shared);
-   m_breaker.SetRates(shared);
-   m_confluence.SetRates(shared);
-   m_kz.SetEvaluationTime(asOf);
-   bool minuteContext = m_kz.SetMinuteRates(minutes,minutesOK ? minuteStart : 0,minutesOK ? asOf : 0);
+   m_swing.SetRates(context.shared);
+   m_structure.SetRates(context.shared);
+   m_ob.SetRates(context.shared);
+   m_fvg.SetRates(context.shared);
+   m_liquidity.SetRates(context.shared);
+   m_pd.SetRates(context.shared);
+   m_ote.SetRates(context.shared);
+   m_kz.SetRates(context.shared);
+   m_breaker.SetRates(context.shared);
+   m_confluence.SetRates(context.shared);
+   m_kz.SetEvaluationTime(context.asOf);
+   bool minuteContext = m_kz.SetMinuteRates(context.minutes,context.minutesOK ? context.minuteStart : 0,
+                                           context.minutesOK ? context.asOf : 0);
    bool swingOK = m_swing.Update();
    bool structureOK = swingOK && m_structure.Update();
    bool obOK = structureOK && m_ob.Update();
@@ -475,7 +428,7 @@ bool CSmcManager::Update()
    string analysisMessage = "";
    if(m_cs != NULL)
      {
-      m_cs.SetRates(shared);
+      m_cs.SetRates(context.shared);
       if(!m_cs.Update())
         {
          analysisOK = false;
@@ -484,7 +437,7 @@ bool CSmcManager::Update()
      }
    if(m_vix != NULL)
      {
-      m_vix.SetRates(shared);
+      m_vix.SetRates(context.shared);
       if(!m_vix.Update())
         {
          analysisOK = false;
@@ -495,7 +448,7 @@ bool CSmcManager::Update()
    SmcAppendLegacySnapshot(m_snapshot,m_legacyTime,m_swing,m_structure,m_ob,m_fvg,m_liquidity,
                            m_pd,m_ote,m_kz,m_breaker,swingOK,structureOK,obOK,fvgOK,
                            liquidityOK,pdOK,oteOK,kzOK,breakerOK);
-   SmcFinalizeSnapshot(m_snapshot,closed);
+   SmcFinalizeSnapshot(m_snapshot,context.closed);
    if((!confluenceOK || !analysisOK) && m_snapshot.status == SMC_STATUS_READY)
       m_snapshot.status = SMC_STATUS_PARTIAL;
    if(!analysisOK) m_snapshot.message = analysisMessage;
