@@ -1,6 +1,8 @@
 #property strict
 #include "TestHarness.mqh"
 #include <SMC/SmcManager.mqh>
+#include <SMC/Utils/SnapshotExporter.mqh>
+#include "fixtures/ManagerSnapshot.mqh"
 
 void ManagerRates(MqlRates &rates[])
   {
@@ -25,18 +27,56 @@ ENUM_SMC_STATUS ManagerConceptStatus(const SmcSnapshot &snapshot,const ENUM_SMC_
    return SMC_STATUS_ERROR;
   }
 
+bool ManagerSameConfig(const SmcConfig &a,const SmcConfig &b)
+  {
+   if(a.lookbackBars!=b.lookbackBars ||
+      a.maxRecordsPerConcept!=b.maxRecordsPerConcept ||
+      a.swingStrength!=b.swingStrength ||
+      a.displacementBaseline!=b.displacementBaseline ||
+      a.displacementMultiplier!=b.displacementMultiplier ||
+      a.displacementBodyFraction!=b.displacementBodyFraction ||
+      a.minFvgPips!=b.minFvgPips ||
+      a.maxZoneAge!=b.maxZoneAge ||
+      a.bprMaxSeparation!=b.bprMaxSeparation ||
+      a.po3ExpiryBars!=b.po3ExpiryBars ||
+      a.smtSymbol!=b.smtSymbol ||
+      a.smtRadius!=b.smtRadius ||
+      a.enableDraw!=b.enableDraw ||
+      a.enableCalendar!=b.enableCalendar ||
+      a.enableSMT!=b.enableSMT ||
+      a.enablePO3!=b.enablePO3 ||
+      a.enableDisplacement!=b.enableDisplacement ||
+      a.enableMSS!=b.enableMSS ||
+      a.enableIFVG!=b.enableIFVG ||
+      a.enableBPR!=b.enableBPR ||
+      a.enableCS!=b.enableCS ||
+      a.enableVIX!=b.enableVIX) return false;
+   for(int i=0;i<3;i++)
+      if(a.sessions[i].name!=b.sessions[i].name || a.sessions[i].startMinute!=b.sessions[i].startMinute ||
+         a.sessions[i].endMinute!=b.sessions[i].endMinute) return false;
+   return true;
+  }
+
 bool ManagerSameRecords(const SmcSnapshot &a,const SmcSnapshot &b)
   {
-   if(a.status!=b.status || a.asOf!=b.asOf || ArraySize(a.records)!=ArraySize(b.records) ||
+   if(a.symbol!=b.symbol || a.timeframe!=b.timeframe || a.timeBasis!=b.timeBasis ||
+      a.message!=b.message || !ManagerSameConfig(a.config,b.config) ||
+      a.status!=b.status || a.asOf!=b.asOf || ArraySize(a.records)!=ArraySize(b.records) ||
       ArraySize(a.modules)!=ArraySize(b.modules)) return false;
    for(int i=0;i<ArraySize(a.records);i++)
-      if(a.records[i].id!=b.records[i].id || a.records[i].confirmedAt!=b.records[i].confirmedAt ||
+      if(a.records[i].id!=b.records[i].id || a.records[i].concept!=b.records[i].concept ||
+         a.records[i].sourceTime!=b.records[i].sourceTime || a.records[i].updatedAt!=b.records[i].updatedAt ||
+         a.records[i].direction!=b.records[i].direction || a.records[i].confirmedAt!=b.records[i].confirmedAt ||
          a.records[i].state!=b.records[i].state || a.records[i].lower!=b.records[i].lower ||
          a.records[i].upper!=b.records[i].upper || a.records[i].active!=b.records[i].active ||
-         a.records[i].reason!=b.records[i].reason || a.records[i].relatedId!=b.records[i].relatedId)
+         a.records[i].reason!=b.records[i].reason || a.records[i].relatedId!=b.records[i].relatedId ||
+         a.records[i].secondaryId!=b.records[i].secondaryId || a.records[i].periodStart!=b.records[i].periodStart ||
+         a.records[i].periodEnd!=b.records[i].periodEnd || a.records[i].referencePrice!=b.records[i].referencePrice ||
+         a.records[i].comparisonPrice!=b.records[i].comparisonPrice || a.records[i].strength!=b.records[i].strength)
          return false;
    for(int i=0;i<ArraySize(a.modules);i++)
       if(a.modules[i].concept!=b.modules[i].concept || a.modules[i].status!=b.modules[i].status ||
+         a.modules[i].asOf!=b.modules[i].asOf || a.modules[i].message!=b.modules[i].message ||
          a.modules[i].truncated!=b.modules[i].truncated) return false;
    return true;
   }
@@ -107,6 +147,9 @@ void OnStart()
    for(int i=0;i<SMC_CONCEPT_COUNT;i++) TestAssert(counts[i]<=3,"per-concept output cap");
    for(int i=0;i<ArraySize(snapshot.modules);i++) truncated=truncated || snapshot.modules[i].truncated;
    TestAssert(truncated,"capped legacy records identify truncation");
+   string baselineJSON;
+   TestAssert(CSmcSnapshotExporter::Serialize(snapshot,baselineJSON),"serialize complete fixed baseline");
+   TestAssert(baselineJSON==ManagerExpectedSnapshotJSON(),"fixed history preserves pre-refactor snapshot contract");
    previous=snapshot;
    TestAssert(manager.Update(),"same history updates successfully again");
    manager.GetSnapshot(snapshot);
@@ -114,6 +157,15 @@ void OnStart()
    manager.Clean();
    manager.GetSnapshot(snapshot);
    TestAssert(ManagerSameRecords(previous,snapshot),"Clean preserves analysis snapshot");
+   TestAssert(manager.IsInitialized(),"Clean preserves initialization");
+   TestAssert(manager.Update(),"update after Clean succeeds");
+   manager.GetSnapshot(snapshot);
+   TestAssert(ManagerSameRecords(previous,snapshot),"update after Clean preserves all snapshot fields");
+   TestAssert(manager.Init(symbol,PERIOD_M1,config),"same typed config reinitializes");
+   TestAssert(!manager.GetSnapshot(snapshot),"successful reinitialization clears snapshot watermark");
+   TestAssert(manager.Update(),"reinitialized manager updates");
+   manager.GetSnapshot(snapshot);
+   TestAssert(ManagerSameRecords(previous,snapshot),"reinitialization reproduces complete typed snapshot");
 
    MqlRates forming[];
    ArrayResize(forming,1);
@@ -139,6 +191,16 @@ void OnStart()
    manager.GetSnapshot(snapshot);
    TestEqual(ManagerConceptStatus(snapshot,ICT_DISPLACEMENT),SMC_STATUS_DISABLED,"old overload does not enable new detectors");
    TestEqual(ManagerConceptStatus(snapshot,ICT_SMT),SMC_STATUS_DISABLED,"old overload clears previous comparison config");
+   previous=snapshot;
+   TestAssert(manager.Init(symbol,PERIOD_M1,config),"typed Init after legacy Init restores typed settings");
+   TestAssert(!manager.GetSnapshot(snapshot),"typed switch clears old snapshot watermark");
+   TestAssert(!manager.Update(),"typed switch restores absent comparison dependency");
+   manager.GetSnapshot(snapshot);
+   TestEqual(ManagerConceptStatus(snapshot,ICT_SMT),SMC_STATUS_NOT_READY,"typed switch restores SMT configuration");
+   TestAssert(manager.Init(symbol,PERIOD_M1,false,false,false),"switch back to legacy settings");
+   TestAssert(manager.Update(),"legacy switch updates again");
+   manager.GetSnapshot(snapshot);
+   TestAssert(ManagerSameRecords(previous,snapshot),"legacy switch reproduces complete legacy snapshot");
    manager.Confluence().SetMinConfluence(0);
    manager.Confluence().SetMinScore(0);
    TestAssert(manager.Update(),"ready confluence fixture updates");
