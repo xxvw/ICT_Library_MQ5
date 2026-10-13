@@ -50,6 +50,10 @@ Publication checks the report's commit SHA against the pushed PR head and checks
 
 Main protection applies to administrators, requires current local validation, and disallows direct pushes, force pushes, and deletion. GitHub runs no hosted or self-hosted validation jobs: the commit status records checks performed on the maintainer's machine. Local status publication depends on the maintainer's authenticated GitHub access; it is not a remotely attested CI service.
 
+## Internal architecture
+
+See [MQL5 core architecture](MQL5_CORE.md) for manager ownership, history contexts, record adapters, and regression boundaries. Internal refactors preserve the existing initialization, update, cleanup, and getter APIs.
+
 ## Focused diagnostics
 
 Use focused commands while developing to shorten feedback. Run the full gate again for the final commit before requesting merge:

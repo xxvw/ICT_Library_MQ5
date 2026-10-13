@@ -74,6 +74,7 @@ void OnDeinit(const int reason) { smc.Clean(); }
 ## ドキュメントと開発
 
 - [ドキュメント一覧](docs/README.md)：従来の日本語リファレンスも掲載しています。
+- [MQL5中核の設計（英語）](docs/MQL5_CORE.md)。
 - [検出ルールと既定値（英語）](docs/ICT_RULES.md)。
 - [ローカル検証と開発手順（英語）](docs/DEVELOPMENT.md)。
 - [貢献ガイド](CONTRIBUTING.md)、[行動規範](CODE_OF_CONDUCT.md)、[セキュリティ報告](SECURITY.md)、[変更履歴](CHANGELOG.md)。
