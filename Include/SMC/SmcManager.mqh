@@ -65,6 +65,11 @@ private:
    bool              m_legacyTime;
 
    void              ReleaseModules();
+   bool              CreateLegacyModules(const int window);
+   void              ConnectConfluence();
+   bool              CreateAnalysisModules();
+   bool              LegacyInitializationFailed();
+   void              ConfigureModules(const int window,const bool legacyTime);
    bool              EvaluateICT(const SmcHistoryContext &context);
    void              UpdateLegacyModules(const SmcHistoryContext &context,SmcModuleUpdateResult &result);
    void              UpdateAnalysisModules(const SmcHistoryContext &context,SmcModuleUpdateResult &result);
@@ -144,6 +149,8 @@ CSmcManager::~CSmcManager()
 //+------------------------------------------------------------------+
 void CSmcManager::ReleaseModules()
   {
+   // Clean preserves analysis and initialization; only this private path
+   // destroys owned modules, dependents before their shared dependencies.
    Clean();
 
    if(m_confluence != NULL) { delete m_confluence; m_confluence = NULL; }
@@ -207,109 +214,79 @@ bool CSmcManager::InitModules(const string symbol,const ENUM_TIMEFRAMES timefram
       return false;
      }
    SmcUnavailableSnapshot(m_snapshot,config,m_symbol,m_timeframe,SMC_STATUS_NOT_READY,"Update has not run",true);
-   const bool enableDraw = config.enableDraw;
    // Legacy OB/FVG probability baselines consume 20 preceding candles.
    const int window = config.lookbackBars+MathMax(config.WarmupBars(),23);
-
-//--- 1. SwingPoints (基盤 - 全モジュールが共有)
-   m_swing = new CSmcSwingPoints();
-   if(!m_swing.Init(m_symbol, m_timeframe, enableDraw,config.swingStrength,2*window,window))
+   if(!CreateLegacyModules(window) || !CreateAnalysisModules())
      {
       ReleaseModules();
-      m_snapshot.status = SMC_STATUS_ERROR;
-      m_snapshot.message = "Legacy module initialization failed";
       return false;
      }
+   ConfigureModules(window,legacyTime);
+   m_initialized = true;
+   Print("[SMC Manager] Initialized for ", m_symbol, " ", EnumToString(m_timeframe));
+   return true;
+  }
+
+// Creation follows the original dependency order; the manager owns every
+// pointer and the coordinator releases any partially constructed graph.
+bool CSmcManager::CreateLegacyModules(const int window)
+  {
+   const bool enableDraw = m_config.enableDraw;
+//--- 1. SwingPoints (基盤 - 全モジュールが共有)
+   m_swing = new CSmcSwingPoints();
+   if(!m_swing.Init(m_symbol, m_timeframe, enableDraw,m_config.swingStrength,2*window,window))
+      return LegacyInitializationFailed();
 
 //--- 2. MarketStructure (SwingPointsを共有)
    m_structure = new CSmcMarketStructure();
    if(!m_structure.Init(m_symbol, m_timeframe, enableDraw, m_swing))
-     {
-      ReleaseModules();
-      m_snapshot.status = SMC_STATUS_ERROR;
-      m_snapshot.message = "Legacy module initialization failed";
-      return false;
-     }
+      return LegacyInitializationFailed();
 
 //--- 3. OrderBlock (MarketStructureを共有)
    m_ob = new CSmcOrderBlock();
    if(!m_ob.Init(m_symbol, m_timeframe, enableDraw, m_structure))
-     {
-      ReleaseModules();
-      m_snapshot.status = SMC_STATUS_ERROR;
-      m_snapshot.message = "Legacy module initialization failed";
-      return false;
-     }
+      return LegacyInitializationFailed();
 
 //--- 4. FairValueGap (独立)
    m_fvg = new CSmcFairValueGap();
    if(!m_fvg.Init(m_symbol, m_timeframe, enableDraw))
-     {
-      ReleaseModules();
-      m_snapshot.status = SMC_STATUS_ERROR;
-      m_snapshot.message = "Legacy module initialization failed";
-      return false;
-     }
+      return LegacyInitializationFailed();
 
 //--- 5. Liquidity (SwingPointsを共有)
    m_liquidity = new CSmcLiquidity();
    if(!m_liquidity.Init(m_symbol, m_timeframe, enableDraw, m_swing))
-     {
-      ReleaseModules();
-      m_snapshot.status = SMC_STATUS_ERROR;
-      m_snapshot.message = "Legacy module initialization failed";
-      return false;
-     }
+      return LegacyInitializationFailed();
 
 //--- 6. PremiumDiscount (SwingPointsを共有)
    m_pd = new CSmcPremiumDiscount();
    if(!m_pd.Init(m_symbol, m_timeframe, enableDraw, m_swing))
-     {
-      ReleaseModules();
-      m_snapshot.status = SMC_STATUS_ERROR;
-      m_snapshot.message = "Legacy module initialization failed";
-      return false;
-     }
+      return LegacyInitializationFailed();
 
 //--- 7. OptimalTradeEntry (SwingPointsを共有)
    m_ote = new CSmcOptimalTradeEntry();
    if(!m_ote.Init(m_symbol, m_timeframe, enableDraw, m_swing))
-     {
-      ReleaseModules();
-      m_snapshot.status = SMC_STATUS_ERROR;
-      m_snapshot.message = "Legacy module initialization failed";
-      return false;
-     }
+      return LegacyInitializationFailed();
 
 //--- 8. KillZone (独立)
    m_kz = new CSmcKillZone();
    if(!m_kz.Init(m_symbol, m_timeframe, enableDraw))
-     {
-      ReleaseModules();
-      m_snapshot.status = SMC_STATUS_ERROR;
-      m_snapshot.message = "Legacy module initialization failed";
-      return false;
-     }
+      return LegacyInitializationFailed();
 
 //--- 9. BreakerBlock (OrderBlock/MarketStructureを共有)
    m_breaker = new CSmcBreakerBlock();
    if(!m_breaker.Init(m_symbol, m_timeframe, enableDraw, m_ob, m_structure))
-     {
-      ReleaseModules();
-      m_snapshot.status = SMC_STATUS_ERROR;
-      m_snapshot.message = "Legacy module initialization failed";
-      return false;
-     }
+      return LegacyInitializationFailed();
 
 //--- 10. Confluence (全モジュール参照)
    m_confluence = new CSmcConfluence();
    if(!m_confluence.Init(m_symbol, m_timeframe, enableDraw))
-     {
-      ReleaseModules();
-      m_snapshot.status = SMC_STATUS_ERROR;
-      m_snapshot.message = "Legacy module initialization failed";
-      return false;
-     }
+      return LegacyInitializationFailed();
+   ConnectConfluence();
+   return true;
+  }
+
+void CSmcManager::ConnectConfluence()
+  {
    m_confluence.SetStructure(m_structure);
    m_confluence.SetOrderBlock(m_ob);
    m_confluence.SetFVG(m_fvg);
@@ -317,16 +294,16 @@ bool CSmcManager::InitModules(const string symbol,const ENUM_TIMEFRAMES timefram
    m_confluence.SetOTE(m_ote);
    m_confluence.SetKillZone(m_kz);
    m_confluence.SetBreaker(m_breaker);
+  }
 
+bool CSmcManager::CreateAnalysisModules()
+  {
 //--- 11. CurrencyStrength (オプション)
    if(m_enableCS)
      {
       m_cs = new CSmcCurrencyStrength();
       if(!m_cs.Init(m_symbol, m_timeframe, false))
-        {
-         ReleaseModules();
          return false;
-        }
      }
 
 //--- 12. VIXCalculator (オプション)
@@ -334,33 +311,39 @@ bool CSmcManager::InitModules(const string symbol,const ENUM_TIMEFRAMES timefram
      {
       m_vix = new CSmcVIXCalculator();
       if(!m_vix.Init(m_symbol, m_timeframe, false))
-        {
-         ReleaseModules();
          return false;
-        }
      }
 
+   return true;
+  }
+
+bool CSmcManager::LegacyInitializationFailed()
+  {
+   m_snapshot.status = SMC_STATUS_ERROR;
+   m_snapshot.message = "Legacy module initialization failed";
+   return false;
+  }
+
+void CSmcManager::ConfigureModules(const int window,const bool legacyTime)
+  {
    m_ob.SetEvaluationLimits(window,2*window);
    m_fvg.SetEvaluationLimits(window,2*window);
    m_structure.SetMaxBreaks(2*window);
    m_liquidity.SetMaxLevels(2*window);
    m_breaker.SetMaxBlocks(2*window);
-   m_breaker.SetMaxAge(config.maxZoneAge);
-   m_ob.SetMaxAge(config.maxZoneAge);
-   m_fvg.SetMaxAge(config.maxZoneAge);
-   m_fvg.SetMinSizePips(config.minFvgPips);
+   m_breaker.SetMaxAge(m_config.maxZoneAge);
+   m_ob.SetMaxAge(m_config.maxZoneAge);
+   m_fvg.SetMaxAge(m_config.maxZoneAge);
+   m_fvg.SetMinSizePips(m_config.minFvgPips);
    if(!legacyTime)
      {
       m_kz.UseBrokerTime();
       m_kz.SetOverlapEnabled(false);
       for(int i = 0; i < 3; i++)
-         m_kz.SetSessionTime((ENUM_SMC_SESSION)(i+1),config.sessions[i].startMinute/60,
-                             config.sessions[i].startMinute%60,config.sessions[i].endMinute/60,
-                             config.sessions[i].endMinute%60);
+         m_kz.SetSessionTime((ENUM_SMC_SESSION)(i+1),m_config.sessions[i].startMinute/60,
+                             m_config.sessions[i].startMinute%60,m_config.sessions[i].endMinute/60,
+                             m_config.sessions[i].endMinute%60);
      }
-   m_initialized = true;
-   Print("[SMC Manager] Initialized for ", m_symbol, " ", EnumToString(m_timeframe));
-   return true;
   }
 
 //+------------------------------------------------------------------+
@@ -475,6 +458,8 @@ bool CSmcManager::Update()
 //+------------------------------------------------------------------+
 void CSmcManager::Clean()
   {
+   // Public drawing cleanup: retain module pointers and the last snapshot so
+   // callers can inspect the results and continue updating after Clean().
    if(m_swing != NULL)      m_swing.Clean();
    if(m_structure != NULL)  m_structure.Clean();
    if(m_ob != NULL)         m_ob.Clean();

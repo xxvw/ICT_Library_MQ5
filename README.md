@@ -74,6 +74,7 @@ The [data contract](docs/DATA_CONTRACT.md) and [JSON Schema](schemas/snapshot.sc
 ## Documentation and development
 
 - [Documentation index](docs/README.md), including retained Japanese reference guides.
+- [MQL5 core architecture](docs/MQL5_CORE.md).
 - [Detection rules and defaults](docs/ICT_RULES.md).
 - [Local validation and development](docs/DEVELOPMENT.md).
 - [Contributing](CONTRIBUTING.md), [code of conduct](CODE_OF_CONDUCT.md), [security reporting](SECURITY.md), and [changes](CHANGELOG.md).

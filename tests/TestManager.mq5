@@ -167,6 +167,25 @@ void OnStart()
    manager.GetSnapshot(snapshot);
    TestAssert(ManagerSameRecords(previous,snapshot),"reinitialization reproduces complete typed snapshot");
 
+   TestAssert(!manager.Init("SMC_MANAGER_MISSING_PRIMARY",PERIOD_M1,config),"module init failure after prior success");
+   TestAssert(!manager.IsInitialized(),"failed module init leaves manager uninitialized");
+   TestEqual(manager.GetStatus(),SMC_STATUS_ERROR,"legacy module init failure preserves error status");
+   TestAssert(!manager.GetSnapshot(snapshot),"failed module init clears snapshot watermark");
+   TestAssert(manager.Swing()==NULL && manager.Structure()==NULL && manager.OB()==NULL && manager.FVG()==NULL &&
+              manager.Liquidity()==NULL && manager.PD()==NULL && manager.OTE()==NULL && manager.KZ()==NULL &&
+              manager.Breaker()==NULL && manager.Confluence()==NULL && manager.CurrStr()==NULL && manager.VIX()==NULL,
+              "failed initialization releases every owned module");
+   manager.Clean();
+   TestEqual(manager.GetTrend(),SMC_TREND_RANGING,"failed manager has default trend");
+   TestEqual(manager.GetSignal(),SIGNAL_WAIT,"failed manager cannot retain trading signal");
+   TestAssert(!manager.Update(),"failed manager cannot update");
+   TestAssert(manager.GetSnapshot(snapshot) && ArraySize(snapshot.records)==0,"failed update exposes empty error snapshot");
+   TestAssert(manager.Init(symbol,PERIOD_M1,config),"manager recovers from failed module initialization");
+   TestAssert(!manager.GetSnapshot(snapshot),"recovery resets failed attempt watermark");
+   TestAssert(manager.Update(),"recovered manager updates");
+   manager.GetSnapshot(snapshot);
+   TestAssert(ManagerSameRecords(previous,snapshot),"recovery reproduces complete fixed snapshot");
+
    MqlRates forming[];
    ArrayResize(forming,1);
    forming[0]=rates[ArraySize(rates)-1];

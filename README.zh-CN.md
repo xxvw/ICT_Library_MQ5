@@ -74,6 +74,7 @@ void OnDeinit(const int reason) { smc.Clean(); }
 ## 文档与开发
 
 - [文档索引](docs/README.md)，包含保留的日文参考指南。
+- [MQL5 核心架构（英文）](docs/MQL5_CORE.md)。
 - [检测规则与默认值](docs/ICT_RULES.md)。
 - [本地验证与开发](docs/DEVELOPMENT.md)。
 - [贡献指南](CONTRIBUTING.md)、[行为准则](CODE_OF_CONDUCT.md)、[安全问题报告](SECURITY.md) 和[变更记录](CHANGELOG.md)。

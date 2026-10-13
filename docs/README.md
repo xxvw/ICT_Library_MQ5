@@ -10,6 +10,7 @@ The English guides below describe the current snapshot interface and project rul
 | [Snapshot API](SNAPSHOT_API.md) | Configure the manager, retrieve typed results, and handle readiness |
 | [Detection rules](ICT_RULES.md) | Exact project definitions, defaults, confirmation, and lifecycle behavior |
 | [Data contract](DATA_CONTRACT.md) | JSON fields, schema versions, broker timestamps, and sample output |
+| [MQL5 core architecture](MQL5_CORE.md) | Internal responsibilities, lifecycle, update data flow, and regression boundaries |
 | [Development](DEVELOPMENT.md) | Local validation, tool requirements, and the PR workflow |
 | [Contributing](../CONTRIBUTING.md) | Contribution and review policy |
 

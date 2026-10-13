@@ -76,6 +76,7 @@ El [contrato de datos](docs/DATA_CONTRACT.md) y el [esquema JSON](schemas/snapsh
 La documentación en inglés es la referencia oficial del proyecto.
 
 - [Índice de documentación](docs/README.md), que incluye las guías de referencia en japonés conservadas.
+- [Arquitectura del núcleo MQL5 (inglés)](docs/MQL5_CORE.md).
 - [Reglas de detección y valores predeterminados](docs/ICT_RULES.md).
 - [Validación local y desarrollo](docs/DEVELOPMENT.md).
 - [Cómo contribuir](CONTRIBUTING.md), [código de conducta](CODE_OF_CONDUCT.md), [notificación de problemas de seguridad](SECURITY.md) e [historial de cambios](CHANGELOG.md).
