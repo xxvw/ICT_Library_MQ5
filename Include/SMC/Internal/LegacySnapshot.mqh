@@ -3,6 +3,7 @@
 #define __SMC_INTERNAL_LEGACY_SNAPSHOT_MQH__
 
 #include "../Core/SmcSnapshot.mqh"
+#include "UpdateResult.mqh"
 #include "../SwingPoints.mqh"
 #include "../MarketStructure.mqh"
 #include "../OrderBlock.mqh"
@@ -158,17 +159,15 @@ void SmcAppendLegacySnapshot(SmcSnapshot &snapshot,const bool legacyTime,
                              CSmcOrderBlock *ob,CSmcFairValueGap *fvg,CSmcLiquidity *liquidity,
                              CSmcPremiumDiscount *pd,CSmcOptimalTradeEntry *ote,
                              CSmcKillZone *kz,CSmcBreakerBlock *breaker,
-                             const bool swingOK,const bool structureOK,const bool obOK,
-                             const bool fvgOK,const bool liquidityOK,const bool pdOK,
-                             const bool oteOK,const bool kzOK,const bool breakerOK)
+                             const SmcModuleUpdateResult &result)
   {
    SmcLegacyRecordContext context;
    context.symbol = snapshot.symbol;
    context.timeframe = snapshot.timeframe;
    context.asOf = snapshot.asOf;
-   SmcSetLegacyStatus(snapshot,ICT_SWING_HIGH,swingOK);
-   SmcSetLegacyStatus(snapshot,ICT_SWING_LOW,swingOK);
-   if(swingOK)
+   SmcSetLegacyStatus(snapshot,ICT_SWING_HIGH,result.swingOK);
+   SmcSetLegacyStatus(snapshot,ICT_SWING_LOW,result.swingOK);
+   if(result.swingOK)
       for(int side = 0; side < 2; side++)
         {
          int count = side == 0 ? swing.GetHighCount() : swing.GetLowCount();
@@ -182,9 +181,9 @@ void SmcAppendLegacySnapshot(SmcSnapshot &snapshot,const bool legacyTime,
             SmcAppendRecord(snapshot,record);
            }
         }
-   SmcSetLegacyStatus(snapshot,ICT_BOS,structureOK);
-   SmcSetLegacyStatus(snapshot,ICT_CHOCH,structureOK);
-   if(structureOK)
+   SmcSetLegacyStatus(snapshot,ICT_BOS,result.structureOK);
+   SmcSetLegacyStatus(snapshot,ICT_CHOCH,result.structureOK);
+   if(result.structureOK)
       for(int i = 0; i < structure.GetBreakCount(); i++)
         {
          SmcStructureBreak brk;
@@ -193,11 +192,11 @@ void SmcAppendLegacySnapshot(SmcSnapshot &snapshot,const bool legacyTime,
          SmcLegacyBreakRecord(brk,context,record);
          SmcAppendRecord(snapshot,record);
         }
-   SmcSetLegacyStatus(snapshot,ICT_ORDER_BLOCK,obOK);
-   SmcSetLegacyStatus(snapshot,ICT_FVG,fvgOK);
+   SmcSetLegacyStatus(snapshot,ICT_ORDER_BLOCK,result.obOK);
+   SmcSetLegacyStatus(snapshot,ICT_FVG,result.fvgOK);
    for(int kind = 0; kind < 2; kind++)
      {
-      if((kind == 0 && !obOK) || (kind == 1 && !fvgOK)) continue;
+      if((kind == 0 && !result.obOK) || (kind == 1 && !result.fvgOK)) continue;
       for(int side = 0; side < 2; side++)
         {
          int count = kind == 0 ? (side == 0 ? ob.GetBullishCount() : ob.GetBearishCount()) :
@@ -216,8 +215,8 @@ void SmcAppendLegacySnapshot(SmcSnapshot &snapshot,const bool legacyTime,
            }
         }
      }
-   SmcSetLegacyStatus(snapshot,ICT_BREAKER,breakerOK);
-   if(breakerOK)
+   SmcSetLegacyStatus(snapshot,ICT_BREAKER,result.breakerOK);
+   if(result.breakerOK)
       for(int i = 0; i < breaker.GetBreakerCount(); i++)
         {
          SmcZone zone;
@@ -228,8 +227,8 @@ void SmcAppendLegacySnapshot(SmcSnapshot &snapshot,const bool legacyTime,
             SmcAppendRecord(snapshot,record);
            }
         }
-   SmcSetLegacyStatus(snapshot,ICT_LIQUIDITY,liquidityOK);
-   if(liquidityOK)
+   SmcSetLegacyStatus(snapshot,ICT_LIQUIDITY,result.liquidityOK);
+   if(result.liquidityOK)
       for(int i = 0; i < liquidity.GetLevelCount(); i++)
         {
          SmcLiquidityLevel level;
@@ -239,24 +238,24 @@ void SmcAppendLegacySnapshot(SmcSnapshot &snapshot,const bool legacyTime,
          SmcAppendRecord(snapshot,record);
         }
    SmcSwingPoint high,low;
-   bool rangeOK = swingOK && swing.GetSwingHigh(0,high) && swing.GetSwingLow(0,low) && high.price > low.price;
-   SmcSetLegacyStatus(snapshot,ICT_PREMIUM_DISCOUNT,pdOK && rangeOK,"Confirmed high and low are required");
-   SmcSetLegacyStatus(snapshot,ICT_OTE,oteOK && rangeOK,"Confirmed high and low are required");
+   bool rangeOK = result.swingOK && swing.GetSwingHigh(0,high) && swing.GetSwingLow(0,low) && high.price > low.price;
+   SmcSetLegacyStatus(snapshot,ICT_PREMIUM_DISCOUNT,result.pdOK && rangeOK,"Confirmed high and low are required");
+   SmcSetLegacyStatus(snapshot,ICT_OTE,result.oteOK && rangeOK,"Confirmed high and low are required");
    if(rangeOK)
      {
       SmcRecord record;
       SmcLegacyRangeRecord(high,low,pd.GetSwingLow(),pd.GetSwingHigh(),pd.GetEquilibrium(),context,record);
-      if(pdOK) SmcAppendRecord(snapshot,record);
+      if(result.pdOK) SmcAppendRecord(snapshot,record);
       SmcOTEZone oteZone;
-      if(oteOK && ote.GetOTEZone(oteZone))
+      if(result.oteOK && ote.GetOTEZone(oteZone))
         {
          SmcRecord range = record;
          SmcLegacyOTERecord(range,oteZone,context,record);
          SmcAppendRecord(snapshot,record);
         }
      }
-   SmcSetLegacyStatus(snapshot,ICT_KILL_ZONE,kzOK);
-   if(kzOK)
+   SmcSetLegacyStatus(snapshot,ICT_KILL_ZONE,result.kzOK);
+   if(result.kzOK)
       for(int i = 1; i <= 3; i++)
         {
          SmcSessionInfo session;

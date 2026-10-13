@@ -1,6 +1,7 @@
 #property strict
 #include "TestHarness.mqh"
 #include "../Include/SMC/Core/IctEngine.mqh"
+#include <SMC/Internal/UpdateResult.mqh>
 
 void EngineConfig(SmcConfig &config)
   {
@@ -311,6 +312,50 @@ void EngineTestReplay()
    EngineSnapshotsEqual(replay, first);
   }
 
+void EngineTestManagerCompletion()
+  {
+   SmcSnapshot snapshot;
+   snapshot.Reset(); snapshot.asOf=300;
+   MqlRates empty[];
+   SmcModuleUpdateResult result;
+   result.Reset(); result.confluenceOK=true;
+   SmcSetModuleStatus(snapshot,ICT_FVG,SMC_STATUS_READY,300,false,"");
+   snapshot.config.maxRecordsPerConcept=1;
+   EngineRecord(snapshot,"older-zone",ICT_FVG,100,160);
+   EngineRecord(snapshot,"newer-zone",ICT_FVG,200,260);
+   SmcCompleteManagerSnapshot(snapshot,empty,result);
+   TestEqual(snapshot.status,SMC_STATUS_READY,"complete manager remains ready");
+   TestAssert(snapshot.message=="","successful optional stages retain empty diagnostic");
+   TestAssert(ArraySize(snapshot.records)==1 && EngineHasRecord(snapshot,"newer-zone"),
+              "manager completion retains final output limit and ordering");
+   TestAssert(snapshot.modules[0].truncated,"manager completion retains truncation evidence");
+
+   result.confluenceOK=false;
+   SmcCompleteManagerSnapshot(snapshot,empty,result);
+   TestEqual(snapshot.status,SMC_STATUS_PARTIAL,"unavailable confluence downgrades ready snapshot");
+   TestAssert(snapshot.message=="Confluence requires all legacy modules to be available",
+              "confluence diagnostic preserved");
+   result.analysisOK=false;
+   result.analysisMessage="Currency strength history is unavailable; VIX calculation is unavailable";
+   SmcCompleteManagerSnapshot(snapshot,empty,result);
+   TestEqual(snapshot.status,SMC_STATUS_PARTIAL,"both optional stages unavailable remains partial");
+   TestAssert(snapshot.message==result.analysisMessage,"analysis diagnostic takes precedence over confluence");
+
+   SmcSetModuleStatus(snapshot,ICT_FVG,SMC_STATUS_ERROR,0,false,"detector error");
+   SmcCompleteManagerSnapshot(snapshot,empty,result);
+   TestEqual(snapshot.status,SMC_STATUS_ERROR,"optional failures cannot downgrade detector error to partial");
+   TestAssert(snapshot.message==result.analysisMessage,"analysis diagnostic precedence retained on error");
+   SmcSetModuleStatus(snapshot,ICT_FVG,SMC_STATUS_NOT_READY,0,false,"history missing");
+   SmcCompleteManagerSnapshot(snapshot,empty,result);
+   TestEqual(snapshot.status,SMC_STATUS_NOT_READY,"optional failures do not turn wholly unavailable history into partial");
+   SmcSetModuleStatus(snapshot,ICT_SWING_HIGH,SMC_STATUS_READY,300,false,"");
+   result.confluenceOK=true; result.analysisOK=true;
+   snapshot.message="existing diagnostic";
+   SmcCompleteManagerSnapshot(snapshot,empty,result);
+   TestEqual(snapshot.status,SMC_STATUS_PARTIAL,"mixed detector availability remains partial despite successful optional stages");
+   TestAssert(snapshot.message=="existing diagnostic","successful optional stages do not overwrite existing diagnostic");
+  }
+
 void OnStart()
   {
    TestBegin("ICT-engine");
@@ -319,5 +364,6 @@ void OnStart()
    EngineTestAggregation();
    EngineTestFinalization();
    EngineTestReplay();
+   EngineTestManagerCompletion();
    TestFinish();
   }
