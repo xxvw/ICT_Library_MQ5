@@ -65,6 +65,9 @@ private:
    bool              m_legacyTime;
 
    void              ReleaseModules();
+   bool              EvaluateICT(const SmcHistoryContext &context);
+   void              UpdateLegacyModules(const SmcHistoryContext &context,SmcModuleUpdateResult &result);
+   void              UpdateAnalysisModules(const SmcHistoryContext &context,SmcModuleUpdateResult &result);
    bool              InitModules(const string symbol,const ENUM_TIMEFRAMES timeframe,
                                   const SmcConfig &config,const bool legacyTime);
 
@@ -370,6 +373,76 @@ bool CSmcManager::GetSnapshot(SmcSnapshot &snapshot) const
    return true;
   }
 
+bool CSmcManager::EvaluateICT(const SmcHistoryContext &context)
+  {
+   SmcEvaluateICT(context.closed,context.daily,context.weekly,context.minutes,context.companion,
+                   m_config,m_symbol,m_timeframe,context.tick,context.pip,context.companionTick,m_snapshot,
+                   context.minutesOK ? context.minuteStart : 0,context.minutesOK ? context.asOf : 0);
+   if(m_snapshot.status == SMC_STATUS_ERROR || m_snapshot.asOf == 0)
+     {
+      for(int i = 0; i <= (int)ICT_BREAKER; i++)
+         SmcSetModuleStatus(m_snapshot,(ENUM_SMC_CONCEPT)i,SMC_STATUS_NOT_READY,0,false,"Snapshot evaluation is unavailable");
+      return false;
+     }
+
+   return true;
+  }
+
+void CSmcManager::UpdateLegacyModules(const SmcHistoryContext &context,SmcModuleUpdateResult &result)
+  {
+   result.Reset();
+   // Every primary-timeframe module sees the same bars, including the forming
+   // sentinel that old APIs address at shift zero. Detector loops exclude it.
+   m_swing.SetRates(context.shared);
+   m_structure.SetRates(context.shared);
+   m_ob.SetRates(context.shared);
+   m_fvg.SetRates(context.shared);
+   m_liquidity.SetRates(context.shared);
+   m_pd.SetRates(context.shared);
+   m_ote.SetRates(context.shared);
+   m_kz.SetRates(context.shared);
+   m_breaker.SetRates(context.shared);
+   m_confluence.SetRates(context.shared);
+   m_kz.SetEvaluationTime(context.asOf);
+   bool minuteContext = m_kz.SetMinuteRates(context.minutes,context.minutesOK ? context.minuteStart : 0,
+                                           context.minutesOK ? context.asOf : 0);
+   result.swingOK = m_swing.Update();
+   result.structureOK = result.swingOK && m_structure.Update();
+   result.obOK = result.structureOK && m_ob.Update();
+   result.fvgOK = m_fvg.Update();
+   result.liquidityOK = result.swingOK && m_liquidity.Update();
+   result.pdOK = result.swingOK && m_pd.Update();
+   result.oteOK = result.swingOK && m_ote.Update();
+   result.kzOK = minuteContext && m_kz.Update();
+   result.breakerOK = result.obOK && result.structureOK && m_breaker.Update();
+   result.confluenceOK = result.AllLegacyReady() && m_confluence.Update();
+  }
+
+void CSmcManager::UpdateAnalysisModules(const SmcHistoryContext &context,SmcModuleUpdateResult &result)
+  {
+   result.analysisOK = true;
+   result.analysisMessage = "";
+   if(m_cs != NULL)
+     {
+      m_cs.SetRates(context.shared);
+      if(!m_cs.Update())
+        {
+         result.analysisOK = false;
+         result.analysisMessage = "Currency strength history is unavailable";
+        }
+     }
+   if(m_vix != NULL)
+     {
+      m_vix.SetRates(context.shared);
+      if(!m_vix.Update())
+        {
+         result.analysisOK = false;
+         if(result.analysisMessage != "") result.analysisMessage += "; ";
+         result.analysisMessage += "VIX calculation is unavailable";
+        }
+     }
+  }
+
 bool CSmcManager::Update()
   {
    m_hasSnapshot = true;
@@ -388,71 +461,13 @@ bool CSmcManager::Update()
                              "Primary history is unavailable, unsynchronized or shorter than lookback plus warmup",true);
       return false;
      }
-   SmcEvaluateICT(context.closed,context.daily,context.weekly,context.minutes,context.companion,
-                   m_config,m_symbol,m_timeframe,context.tick,context.pip,context.companionTick,m_snapshot,
-                   context.minutesOK ? context.minuteStart : 0,context.minutesOK ? context.asOf : 0);
-   if(m_snapshot.status == SMC_STATUS_ERROR || m_snapshot.asOf == 0)
-     {
-      for(int i = 0; i <= (int)ICT_BREAKER; i++)
-         SmcSetModuleStatus(m_snapshot,(ENUM_SMC_CONCEPT)i,SMC_STATUS_NOT_READY,0,false,"Snapshot evaluation is unavailable");
-      return false;
-     }
-
-   // Every primary-timeframe module sees the same bars, including the forming
-   // sentinel that old APIs address at shift zero. Detector loops exclude it.
-   m_swing.SetRates(context.shared);
-   m_structure.SetRates(context.shared);
-   m_ob.SetRates(context.shared);
-   m_fvg.SetRates(context.shared);
-   m_liquidity.SetRates(context.shared);
-   m_pd.SetRates(context.shared);
-   m_ote.SetRates(context.shared);
-   m_kz.SetRates(context.shared);
-   m_breaker.SetRates(context.shared);
-   m_confluence.SetRates(context.shared);
-   m_kz.SetEvaluationTime(context.asOf);
-   bool minuteContext = m_kz.SetMinuteRates(context.minutes,context.minutesOK ? context.minuteStart : 0,
-                                           context.minutesOK ? context.asOf : 0);
-   bool swingOK = m_swing.Update();
-   bool structureOK = swingOK && m_structure.Update();
-   bool obOK = structureOK && m_ob.Update();
-   bool fvgOK = m_fvg.Update();
-   bool liquidityOK = swingOK && m_liquidity.Update();
-   bool pdOK = swingOK && m_pd.Update();
-   bool oteOK = swingOK && m_ote.Update();
-   bool kzOK = minuteContext && m_kz.Update();
-   bool breakerOK = obOK && structureOK && m_breaker.Update();
-   bool allLegacy = swingOK && structureOK && obOK && fvgOK && liquidityOK && pdOK && oteOK && kzOK && breakerOK;
-   bool confluenceOK = allLegacy && m_confluence.Update();
-   bool analysisOK = true;
-   string analysisMessage = "";
-   if(m_cs != NULL)
-     {
-      m_cs.SetRates(context.shared);
-      if(!m_cs.Update())
-        {
-         analysisOK = false;
-         analysisMessage = "Currency strength history is unavailable";
-        }
-     }
-   if(m_vix != NULL)
-     {
-      m_vix.SetRates(context.shared);
-      if(!m_vix.Update())
-        {
-         analysisOK = false;
-         if(analysisMessage != "") analysisMessage += "; ";
-         analysisMessage += "VIX calculation is unavailable";
-        }
-     }
+   if(!EvaluateICT(context)) return false;
+   SmcModuleUpdateResult result;
+   UpdateLegacyModules(context,result);
+   UpdateAnalysisModules(context,result);
    SmcAppendLegacySnapshot(m_snapshot,m_legacyTime,m_swing,m_structure,m_ob,m_fvg,m_liquidity,
-                           m_pd,m_ote,m_kz,m_breaker,swingOK,structureOK,obOK,fvgOK,
-                           liquidityOK,pdOK,oteOK,kzOK,breakerOK);
-   SmcFinalizeSnapshot(m_snapshot,context.closed);
-   if((!confluenceOK || !analysisOK) && m_snapshot.status == SMC_STATUS_READY)
-      m_snapshot.status = SMC_STATUS_PARTIAL;
-   if(!analysisOK) m_snapshot.message = analysisMessage;
-   else if(!confluenceOK) m_snapshot.message = "Confluence requires all legacy modules to be available";
+                           m_pd,m_ote,m_kz,m_breaker,result);
+   SmcCompleteManagerSnapshot(m_snapshot,context.closed,result);
    if(m_snapshot.status != SMC_STATUS_READY) m_confluence.InvalidateSignals();
    return m_snapshot.status == SMC_STATUS_READY;
   }

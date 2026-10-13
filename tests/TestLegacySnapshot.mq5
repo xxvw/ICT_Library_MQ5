@@ -127,5 +127,14 @@ void OnStart()
    SmcSetLegacyStatus(snapshot,ICT_FVG,true);
    TestAssert(snapshot.modules[0].status==SMC_STATUS_READY && snapshot.modules[0].asOf==context.asOf &&
               snapshot.modules[0].message=="","ready clears diagnostic");
+   snapshot.Reset(); snapshot.asOf=context.asOf;
+   SmcModuleUpdateResult unavailable;
+   unavailable.Reset();
+   SmcAppendLegacySnapshot(snapshot,false,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,unavailable);
+   TestEqual(ArraySize(snapshot.records),0,"unavailable execution cannot emit legacy records");
+   TestEqual(ArraySize(snapshot.modules),(int)ICT_BREAKER+1,"every legacy concept gets availability");
+   for(int i=0;i<ArraySize(snapshot.modules);i++)
+      TestAssert(snapshot.modules[i].status==SMC_STATUS_NOT_READY && snapshot.modules[i].asOf==0,
+                 "unavailable execution cannot publish ready module watermark");
    TestFinish();
   }
